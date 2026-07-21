@@ -66,8 +66,7 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
                     .modifier(
                         CardSwipeEffect(
                             index: index,
-                            offset: offset,
-                            triggerThreshold: configuration.triggerThreshold
+                            offset: offset
                         )
                     )
             }
@@ -93,8 +92,7 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
                 .modifier(
                     CardSwipeEffect(
                         index: 0,
-                        offset: poppedOffset,
-                        triggerThreshold: configuration.triggerThreshold
+                        offset: poppedOffset
                     )
                 )
                 .id(poppedItem.id)

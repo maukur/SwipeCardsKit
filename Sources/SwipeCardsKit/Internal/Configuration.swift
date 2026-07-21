@@ -15,6 +15,8 @@ final class Configuration<Item: Identifiable> {
     var onSwipeEnd: ((Item, CardSwipeDirection) -> Void)?
     var onThresholdPassed: (() -> Void)?
     var onNoMoreCardsLeft: (() -> Void)?
-    let visibleCount = 4
-    let screenWidth = { UIScreen.current?.bounds.width ?? 400 }()
+    // Top card + 2 fanned behind it. A 4th, near-invisible slot used to fade/scale in
+    // out of nowhere the instant it was promoted — dropping it removes that glitch outright.
+    let visibleCount = 3
+    let screenWidth = UIScreen.current?.bounds.width ?? 400
 }

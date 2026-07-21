@@ -10,36 +10,28 @@ import SwiftUI
 struct CardSwipeEffect: ViewModifier {
     let index: Int
     let offset: CGPoint
-    let triggerThreshold: CGFloat
 
     func body(content: Content) -> some View {
         switch index {
         case 0:
+            // Только верхняя карта следит за пальцем — offset и угол живые, не анимируются
+            // явно (withAnimation), они просто следуют за перетаскиванием кадр в кадр.
             let angle = Angle(degrees: Double(offset.x) / 20)
             content
                 .offset(x: offset.x, y: offset.y)
                 .rotationEffect(angle, anchor: .bottom)
-                .zIndex(4)
-        case 1:
-            // Без offset(y:) — уменьшенная карта центрирована и выглядывает
-            // одинаковой полоской и сверху, и снизу, а не только из-под низа.
-            let progress = min(abs(offset.x) / triggerThreshold, 1)
-            content
-                .scaleEffect(CGFloat(0.95 + progress * 0.05))
-                .rotationEffect(.degrees(9 * Double(1 - progress)), anchor: .center)
-                .zIndex(3)
-        case 2:
-            let progress = min(abs(offset.x) / triggerThreshold, 1)
-            content
-                .scaleEffect(CGFloat(0.9 + progress * 0.05))
-                .rotationEffect(.degrees(-9 * Double(1 - progress)), anchor: .center)
                 .zIndex(2)
-        case 3:
-            let progress = min(abs(offset.x) / triggerThreshold, 1)
+        case 1, 2:
+            // Карты позади стоят в фиксированной "отдыхающей" позе — никакой привязки
+            // к прогрессу драга. Единственное движение — переход между этими двумя позами,
+            // когда popItem() анимированно сдвигает стопку. Так на экране в любой момент
+            // происходит ровно одно осмысленное движение, а не смесь offset+scale+fade.
+            let scale: CGFloat = index == 1 ? 0.95 : 0.9
+            let rotation: Double = index == 1 ? 9 : -9
             content
-                .opacity(progress)
-                .scaleEffect(CGFloat(0.85 + progress * 0.05))
-                .zIndex(1)
+                .scaleEffect(scale)
+                .rotationEffect(.degrees(rotation), anchor: .center)
+                .zIndex(Double(2 - index))
         default:
             content
                 .opacity(0)
