@@ -15,28 +15,32 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
     @State private var lastDirection: CardSwipeDirection = .idle
     @State private var offset: CGPoint = .zero
     @State private var thresholdPassed = false
-    
+    // Guards the single poppedItem/poppedOffset slot: a second pop while one is still
+    // flying off would overwrite that state and let the earlier pop's completion closure
+    // clear the newer card mid-animation (and potentially double-fire onNoMoreCardsLeft).
+    @State private var isPoppingOut = false
+
     @Binding private var items: [Item]
     @Binding private var selectedItem: Item?
     @Binding private var popTrigger: CardSwipeDirection?
     private let content: (Item, _ progress: CGFloat, _ direction: CardSwipeDirection) -> Content
-    
+
     private var screenWidth: CGFloat {
         configuration.screenWidth
     }
-    
+
     public init(
         items: Binding<[Item]>,
         selectedItem: Binding<Item?> = .constant(nil),
         popTrigger: Binding<CardSwipeDirection?> = .constant(nil),
         @ViewBuilder content: @escaping (Item, _ progress: CGFloat, _ direction: CardSwipeDirection) -> Content
     ) {
-        self._items = items
-        self._selectedItem = selectedItem
-        self._popTrigger = popTrigger
+        _items = items
+        _selectedItem = selectedItem
+        _popTrigger = popTrigger
         self.content = content
     }
-    
+
     private var swipeGesture: some Gesture {
         DragGesture(minimumDistance: configuration.minimumDistance)
             .onChanged { value in
@@ -52,12 +56,12 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
                 }
             }
     }
-    
+
     public var body: some View {
         ZStack {
             ForEach(Array(items.prefix(configuration.visibleCount).enumerated()), id: \.element.id) { index, item in
                 let progress = index == 0 ? min(abs(offset.x) / configuration.triggerThreshold, 1) : 0
-                
+
                 content(item, progress, lastDirection)
                     .modifier(
                         CardSwipeEffect(
@@ -81,7 +85,7 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
             popTrigger = nil
         }
     }
-    
+
     @ViewBuilder
     var poppedCard: some View {
         if let poppedItem {
@@ -99,7 +103,7 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
                 }
         }
     }
-    
+
     func onDragChanged(_ value: DragGesture.Value) {
         let translation = value.translation.width
         let correction = correction(for: translation)
@@ -108,12 +112,12 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
             ? value.translation.height
             : 0
         offset = CGPoint(x: offsetX, y: offsetY)
-        
+
         let newDirection = CardSwipeDirection(offset: offsetX)
         if lastDirection != newDirection {
             lastDirection = newDirection
         }
-        
+
         let thresholdReached = abs(offsetX) >= configuration.triggerThreshold
         if thresholdReached != thresholdPassed {
             thresholdPassed = thresholdReached
@@ -132,17 +136,18 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
             -translation
         }
     }
-    
+
     func animatePoppedItem() {
         let multiplier: CGFloat = poppedDirection == .left ? -1 : 1
-        
+
         if #available(iOS 17.0, *) {
             withAnimation(.spring(duration: 0.5)) {
                 poppedOffset.x += (screenWidth * multiplier)
             } completion: {
                 self.poppedItem = nil
                 self.poppedOffset = .zero
-                
+                self.isPoppingOut = false
+
                 if items.isEmpty {
                     configuration.onNoMoreCardsLeft?()
                 }
@@ -151,21 +156,23 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
             withAnimation(.spring(duration: 0.5)) {
                 poppedOffset.x += (screenWidth * multiplier)
             }
-            
+
             Task {
                 try? await Task.sleep(nanoseconds: (1 * NSEC_PER_SEC) / 2)
-                
+
                 self.poppedItem = nil
-                
+                self.isPoppingOut = false
+
                 if items.isEmpty {
                     configuration.onNoMoreCardsLeft?()
                 }
             }
         }
     }
-    
+
     func popItem(notifyCaller: Bool = true) {
-        guard !items.isEmpty else { return }
+        guard !items.isEmpty, !isPoppingOut else { return }
+        isPoppingOut = true
         poppedOffset = offset
         poppedDirection = lastDirection
         poppedItem = items.removeFirst()
@@ -188,17 +195,17 @@ public extension CardSwipeView {
         configuration.animateOnYAxes = animateOnYAxes
         return self
     }
-    
+
     func onSwipeEnd(_ newValue: @escaping (Item, CardSwipeDirection) -> Void) -> CardSwipeView {
         configuration.onSwipeEnd = newValue
         return self
     }
-    
+
     func onNoMoreCardsLeft(_ newValue: @escaping () -> Void) -> CardSwipeView {
         configuration.onNoMoreCardsLeft = newValue
         return self
     }
-    
+
     func onThresholdPassed(_ newValue: @escaping () -> Void) -> CardSwipeView {
         configuration.onThresholdPassed = newValue
         return self
