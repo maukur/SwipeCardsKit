@@ -194,7 +194,11 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
             }
 
             flightTask?.cancel()
-            flightTask = Task {
+            // @MainActor обязателен явно: изоляция замыкания Task{} — компайл-тайм свойство
+            // места объявления, а не потока вызова. animatePoppedItem() — обычный instance-метод,
+            // не MainActor-инференсный `body` из View. Без явной пометки после `await Task.sleep`
+            // код мог бы резюмироваться на потоке кооперативного пула, а не на main.
+            flightTask = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: (1 * NSEC_PER_SEC) / 2)
                 guard !Task.isCancelled else { return }
 
