@@ -23,23 +23,23 @@ struct CardSwipeEffect: ViewModifier {
         case 1:
             let progress = min(abs(offset.x) / triggerThreshold, 1)
             content
-                .offset(y: CGFloat((1 - progress) * 50))
-                .scaleEffect(CGFloat(0.9 + progress * 0.1))
+                .offset(y: CGFloat((1 - progress) * 10))
+                .scaleEffect(CGFloat(0.95 + progress * 0.05))
                 .rotationEffect(.degrees(9 * Double(1 - progress)), anchor: .center)
                 .zIndex(3)
         case 2:
             let progress = min(abs(offset.x) / triggerThreshold, 1)
             content
-                .offset(y: CGFloat(110 - progress * 60))
-                .scaleEffect(CGFloat(0.8 + progress * 0.1))
+                .offset(y: CGFloat(18 - progress * 8))
+                .scaleEffect(CGFloat(0.9 + progress * 0.05))
                 .rotationEffect(.degrees(-9 * Double(1 - progress)), anchor: .center)
                 .zIndex(2)
         case 3:
             let progress = min(abs(offset.x) / triggerThreshold, 1)
             content
                 .opacity(progress)
-                .offset(y: CGFloat(180 - progress * 70))
-                .scaleEffect(CGFloat(0.7 + progress * 0.1))
+                .offset(y: CGFloat(26 - progress * 10))
+                .scaleEffect(CGFloat(0.85 + progress * 0.05))
                 .zIndex(1)
         default:
             content
