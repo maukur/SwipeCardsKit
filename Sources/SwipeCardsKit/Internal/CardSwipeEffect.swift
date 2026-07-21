@@ -25,12 +25,14 @@ struct CardSwipeEffect: ViewModifier {
             content
                 .offset(y: CGFloat((1 - progress) * 50))
                 .scaleEffect(CGFloat(0.9 + progress * 0.1))
+                .rotationEffect(.degrees(15 * Double(1 - progress)), anchor: .bottom)
                 .zIndex(3)
         case 2:
             let progress = min(abs(offset.x) / triggerThreshold, 1)
             content
                 .offset(y: CGFloat(110 - progress * 60))
                 .scaleEffect(CGFloat(0.8 + progress * 0.1))
+                .rotationEffect(.degrees(-15 * Double(1 - progress)), anchor: .bottom)
                 .zIndex(2)
         case 3:
             let progress = min(abs(offset.x) / triggerThreshold, 1)
