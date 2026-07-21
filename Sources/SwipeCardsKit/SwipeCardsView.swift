@@ -20,10 +20,20 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
     // clear the newer card mid-animation (and potentially double-fire onNoMoreCardsLeft).
     @State private var isPoppingOut = false
 
+    // Настоящий драг уже несёт скорость жеста — улёт мягче/резче, чем у кнопки,
+    // у которой скорость всегда нулевая. animatePoppedItem() выбирает кривую по этому флагу.
+    @State private var poppedViaDrag = true
+
+    // pre-iOS17 фолбэк в animatePoppedItem() ждёт через Task.sleep вместо completion-колбэка
+    // withAnimation. Храним хендл и отменяем предыдущий перед стартом нового — без этого,
+    // случись повторный вылет раньше срока, более старая задача могла бы отработать позже
+    // и сбросить isPoppingOut/poppedItem уже после того, как новая карта отлетела и осела.
+    @State private var flightTask: Task<Void, Never>?
+
     @Binding private var items: [Item]
     @Binding private var selectedItem: Item?
     @Binding private var popTrigger: CardSwipeDirection?
-    private let content: (Item, _ progress: CGFloat, _ direction: CardSwipeDirection) -> Content
+    private let content: (Item, _ progress: CGFloat, _ direction: CardSwipeDirection, _ index: Int) -> Content
 
     private var screenWidth: CGFloat {
         configuration.screenWidth
@@ -33,7 +43,7 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
         items: Binding<[Item]>,
         selectedItem: Binding<Item?> = .constant(nil),
         popTrigger: Binding<CardSwipeDirection?> = .constant(nil),
-        @ViewBuilder content: @escaping (Item, _ progress: CGFloat, _ direction: CardSwipeDirection) -> Content
+        @ViewBuilder content: @escaping (Item, _ progress: CGFloat, _ direction: CardSwipeDirection, _ index: Int) -> Content
     ) {
         _items = items
         _selectedItem = selectedItem
@@ -48,11 +58,13 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
             }
             .onEnded { value in
                 if abs(value.translation.width) < configuration.triggerThreshold {
-                    withAnimation(.bouncy) {
+                    // Небольшой перелёт мимо центра и обратно — карта отвечает как отпущенный
+                    // физический объект, а не как сброс к дефолту.
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.82)) {
                         offset = .zero
                     }
                 } else if !items.isEmpty {
-                    popItem()
+                    popItem(triggeredByDrag: true)
                 }
             }
     }
@@ -62,13 +74,19 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
             ForEach(Array(items.prefix(configuration.visibleCount).enumerated()), id: \.element.id) { index, item in
                 let progress = index == 0 ? min(abs(offset.x) / configuration.triggerThreshold, 1) : 0
 
-                content(item, progress, lastDirection)
+                content(item, progress, lastDirection, index)
                     .modifier(
                         CardSwipeEffect(
                             index: index,
                             offset: offset
                         )
                     )
+                    // Явный transition — иначе новая карта, впервые попавшая в prefix(visibleCount),
+                    // подхватывает дефолтный SwiftUI-переход и это конфликтует с анимацией ниже.
+                    .transition(.opacity)
+                    // У каждого слота своя кривая/задержка — карточки не переезжают все разом
+                    // единым блоком, а подтягиваются друг за другом (см. stackAnimation ниже).
+                    .animation(stackAnimation(for: index), value: index)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -80,7 +98,7 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
         .onChange(of: popTrigger ?? .idle) { newValue in
             guard newValue != .idle else { return }
             lastDirection = newValue
-            popItem()
+            popItem(triggeredByDrag: false)
             popTrigger = nil
         }
     }
@@ -88,7 +106,7 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
     @ViewBuilder
     var poppedCard: some View {
         if let poppedItem {
-            content(poppedItem, min(abs(poppedOffset.x) / configuration.triggerThreshold, 1), poppedDirection)
+            content(poppedItem, min(abs(poppedOffset.x) / configuration.triggerThreshold, 1), poppedDirection, 0)
                 .modifier(
                     CardSwipeEffect(
                         index: 0,
@@ -99,6 +117,20 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
                 .onAppear {
                     animatePoppedItem()
                 }
+        }
+    }
+
+    // Каскад стопки: фронтовая карта (новый index 0) реагирует первой и туже́ всего,
+    // вторая (index 1) подтягивается ~60мс спустя спокойнее, а карта, только что попавшая
+    // в видимое окно (index 2), просто проявляется фейдом ~95мс спустя — она уже в своей
+    // целевой позе (масштаб/угол из CardSwipeEffect), крутить её незачем, она и так не видна
+    // из-под двух карт впереди.
+    private func stackAnimation(for index: Int) -> Animation? {
+        switch index {
+        case 0: .spring(response: 0.40, dampingFraction: 0.90)
+        case 1: .spring(response: 0.42, dampingFraction: 1.0).delay(0.06)
+        case 2: .easeOut(duration: 0.28).delay(0.095)
+        default: nil
         }
     }
 
@@ -137,9 +169,15 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
 
     func animatePoppedItem() {
         let multiplier: CGFloat = poppedDirection == .left ? -1 : 1
+        // Драг уже несёт скорость жеста — чуть более резкий, некружащий вылет. Кнопка
+        // стартует с нулевой скорости, поэтому даём кривой чуть больше времени и лёгкий
+        // bounce — это компенсирует отсутствие исходного импульса без отдельной фазы разгона.
+        let flightAnimation: Animation = poppedViaDrag
+            ? .spring(response: 0.32, dampingFraction: 1.0)
+            : .spring(response: 0.38, dampingFraction: 0.95)
 
         if #available(iOS 17.0, *) {
-            withAnimation(.spring(duration: 0.5)) {
+            withAnimation(flightAnimation) {
                 poppedOffset.x += (screenWidth * multiplier)
             } completion: {
                 self.poppedItem = nil
@@ -151,12 +189,14 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
                 }
             }
         } else {
-            withAnimation(.spring(duration: 0.5)) {
+            withAnimation(flightAnimation) {
                 poppedOffset.x += (screenWidth * multiplier)
             }
 
-            Task {
+            flightTask?.cancel()
+            flightTask = Task {
                 try? await Task.sleep(nanoseconds: (1 * NSEC_PER_SEC) / 2)
+                guard !Task.isCancelled else { return }
 
                 self.poppedItem = nil
                 self.isPoppingOut = false
@@ -172,18 +212,17 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
     // popTrigger-путь звал popItem(notifyCaller: false), и если isPoppingOut блокировал
     // повторный вызов (карта ещё летит), внешний код мог решить, что своп случился,
     // хотя колода не сдвинулась. Теперь onSwipeEnd зовётся всегда, когда поп реально прошёл.
-    func popItem() {
+    // withAnimation вокруг сдвига массива больше не нужен — каждый слот стопки анимирует
+    // свой переход сам через .animation(value: index) на самой ForEach-строке (см. body).
+    func popItem(triggeredByDrag: Bool) {
         guard !items.isEmpty, !isPoppingOut else { return }
         isPoppingOut = true
         poppedOffset = offset
         poppedDirection = lastDirection
-        // Без withAnimation здесь оставшиеся карты мгновенно перескакивают на позицию/угол
-        // следующего индекса вместо того, чтобы плавно подъехать вместе с отлетающей картой.
-        withAnimation(.spring(duration: 0.5)) {
-            poppedItem = items.removeFirst()
-            selectedItem = items.first
-            offset = .zero
-        }
+        poppedViaDrag = triggeredByDrag
+        poppedItem = items.removeFirst()
+        selectedItem = items.first
+        offset = .zero
         if let poppedItem {
             configuration.onSwipeEnd?(poppedItem, lastDirection)
         }
