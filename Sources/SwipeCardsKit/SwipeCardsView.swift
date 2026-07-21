@@ -81,7 +81,7 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
         .onChange(of: popTrigger ?? .idle) { newValue in
             guard newValue != .idle else { return }
             lastDirection = newValue
-            popItem(notifyCaller: false)
+            popItem()
             popTrigger = nil
         }
     }
@@ -170,14 +170,18 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
         }
     }
 
-    func popItem(notifyCaller: Bool = true) {
+    // Свайп по кнопке и настоящий драг оба должны надёжно сообщать об исходе — раньше
+    // popTrigger-путь звал popItem(notifyCaller: false), и если isPoppingOut блокировал
+    // повторный вызов (карта ещё летит), внешний код мог решить, что своп случился,
+    // хотя колода не сдвинулась. Теперь onSwipeEnd зовётся всегда, когда поп реально прошёл.
+    func popItem() {
         guard !items.isEmpty, !isPoppingOut else { return }
         isPoppingOut = true
         poppedOffset = offset
         poppedDirection = lastDirection
         poppedItem = items.removeFirst()
         selectedItem = items.first
-        if let poppedItem, notifyCaller {
+        if let poppedItem {
             configuration.onSwipeEnd?(poppedItem, lastDirection)
         }
         offset = .zero
