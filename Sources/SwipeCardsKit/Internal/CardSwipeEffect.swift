@@ -42,7 +42,7 @@ struct CardSwipeEffect: ViewModifier {
             .scaleEffect(scale)
             .offset(x: dx, y: dy)
             .rotationEffect(.degrees(rotation), anchor: .bottom)
-            .opacity(index >= 3 ? 0 : 1)
-            .zIndex(Double(3 - index))
+            .opacity(index >= cardStackVisibleCount ? 0 : 1)
+            .zIndex(Double(cardStackVisibleCount - index))
     }
 }

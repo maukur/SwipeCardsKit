@@ -8,7 +8,15 @@
 import SwiftUI
 
 public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View {
-    @State private var configuration = Configuration<Item>()
+    // Deliberately NOT @State: this is mutated only by the configure()/onXxx() builder
+    // chain below, right after each fresh init — never from within the view's own logic.
+    // @State persists across re-renders by identity, which would make it "sticky" to
+    // whatever configure()/onSwipeEnd() happened to run on the very first render for this
+    // view's identity — every later re-render constructs a new Configuration, calls the
+    // builder methods on it, and SwiftUI would silently discard that instance in favor of
+    // the first one, freezing closures/threshold values forever even if the caller passes
+    // different ones later. A plain `let` just uses whatever this render's chain produced.
+    private let configuration = Configuration<Item>()
     @State private var poppedItem: Item?
     @State private var poppedOffset: CGPoint = .zero
     @State private var poppedDirection: CardSwipeDirection = .idle
@@ -29,6 +37,11 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
     // случись повторный вылет раньше срока, более старая задача могла бы отработать позже
     // и сбросить isPoppingOut/poppedItem уже после того, как новая карта отлетела и осела.
     @State private var flightTask: Task<Void, Never>?
+
+    // popItem() mutates `items` itself (removeFirst), which would otherwise make the
+    // onChange(of: items) reset below fire on every normal pop too. Set right before that
+    // mutation, consumed (and cleared) by the first onChange it triggers.
+    @State private var isInternalItemsMutation = false
 
     @Binding private var items: [Item]
     @Binding private var selectedItem: Item?
@@ -95,11 +108,34 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
         .onAppear {
             selectedItem = items.first
         }
+        .onDisappear {
+            // Pre-iOS17 fly-off fallback (see animatePoppedItem()) isn't tied to this view's
+            // lifetime on its own — without this, a card mid-flight when the screen is
+            // dismissed keeps sleeping in the background and fires onNoMoreCardsLeft? later
+            // on a screen nobody's looking at.
+            flightTask?.cancel()
+        }
         .onChange(of: popTrigger ?? .idle) { newValue in
             guard newValue != .idle else { return }
             lastDirection = newValue
             popItem(triggeredByDrag: false)
             popTrigger = nil
+        }
+        .onChange(of: items) { _ in
+            // Fires both for our own items.removeFirst() in popItem() and for a caller
+            // swapping in an entirely new deck (e.g. reloading the same screen after a
+            // purchase). Only the latter should reset flight state — otherwise this would
+            // cancel the very pop animation it just started.
+            guard !isInternalItemsMutation else {
+                isInternalItemsMutation = false
+                return
+            }
+            flightTask?.cancel()
+            isPoppingOut = false
+            poppedItem = nil
+            poppedOffset = .zero
+            offset = .zero
+            thresholdPassed = false
         }
     }
 
@@ -222,6 +258,7 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
         poppedOffset = offset
         poppedDirection = lastDirection
         poppedViaDrag = triggeredByDrag
+        isInternalItemsMutation = true
         // Существующие слоты (лидер/второй) анимируются каждый своей кривой через
         // .animation(value: index) на ForEach-строке — она перебивает любую ambient-анимацию
         // для этих значений. А вот у карты, только что попавшей в видимое окно (третий слот),
