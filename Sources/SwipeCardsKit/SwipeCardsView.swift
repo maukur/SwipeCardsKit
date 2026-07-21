@@ -179,12 +179,16 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
         isPoppingOut = true
         poppedOffset = offset
         poppedDirection = lastDirection
-        poppedItem = items.removeFirst()
-        selectedItem = items.first
+        // Без withAnimation здесь оставшиеся карты мгновенно перескакивают на позицию/угол
+        // следующего индекса вместо того, чтобы плавно подъехать вместе с отлетающей картой.
+        withAnimation(.spring(duration: 0.5)) {
+            poppedItem = items.removeFirst()
+            selectedItem = items.first
+            offset = .zero
+        }
         if let poppedItem {
             configuration.onSwipeEnd?(poppedItem, lastDirection)
         }
-        offset = .zero
     }
 }
 

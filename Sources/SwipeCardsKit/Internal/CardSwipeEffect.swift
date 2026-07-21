@@ -21,16 +21,16 @@ struct CardSwipeEffect: ViewModifier {
                 .rotationEffect(angle, anchor: .bottom)
                 .zIndex(4)
         case 1:
+            // Без offset(y:) — уменьшенная карта центрирована и выглядывает
+            // одинаковой полоской и сверху, и снизу, а не только из-под низа.
             let progress = min(abs(offset.x) / triggerThreshold, 1)
             content
-                .offset(y: CGFloat((1 - progress) * 10))
                 .scaleEffect(CGFloat(0.95 + progress * 0.05))
                 .rotationEffect(.degrees(9 * Double(1 - progress)), anchor: .center)
                 .zIndex(3)
         case 2:
             let progress = min(abs(offset.x) / triggerThreshold, 1)
             content
-                .offset(y: CGFloat(18 - progress * 8))
                 .scaleEffect(CGFloat(0.9 + progress * 0.05))
                 .rotationEffect(.degrees(-9 * Double(1 - progress)), anchor: .center)
                 .zIndex(2)
@@ -38,7 +38,6 @@ struct CardSwipeEffect: ViewModifier {
             let progress = min(abs(offset.x) / triggerThreshold, 1)
             content
                 .opacity(progress)
-                .offset(y: CGFloat(26 - progress * 10))
                 .scaleEffect(CGFloat(0.85 + progress * 0.05))
                 .zIndex(1)
         default:
