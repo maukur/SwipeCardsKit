@@ -12,30 +12,33 @@ struct CardSwipeEffect: ViewModifier {
     let offset: CGPoint
 
     func body(content: Content) -> some View {
-        switch index {
-        case 0:
-            // Только верхняя карта следит за пальцем — offset и угол живые, не анимируются
-            // явно (withAnimation), они просто следуют за перетаскиванием кадр в кадр.
-            let angle = Angle(degrees: Double(offset.x) / 20)
-            content
-                .offset(x: offset.x, y: offset.y)
-                .rotationEffect(angle, anchor: .bottom)
-                .zIndex(2)
-        case 1, 2:
-            // Карты позади стоят в фиксированной "отдыхающей" позе — никакой привязки
-            // к прогрессу драга. Единственное движение — переход между этими двумя позами,
-            // когда popItem() сдвигает стопку. У каждого слота свой каскадный переход
-            // (см. .animation(_:value:) в SwipeCardsView) — так фронтовая карта реагирует
-            // первой и туже́, а вторая подтягивается следом чуть спокойнее, а не всё разом.
-            let scale: CGFloat = index == 1 ? 0.95 : 0.9
-            let rotation: Double = index == 1 ? 9 : -9
-            content
-                .scaleEffect(scale)
-                .rotationEffect(.degrees(rotation), anchor: .center)
-                .zIndex(Double(2 - index))
-        default:
-            content
-                .opacity(0)
-        }
+        // Один и тот же набор модификаторов для всех слотов — меняются только ЗНАЧЕНИЯ по
+        // index, а не сама структура вьюхи. Раньше это был switch с разными веткам (case 0:
+        // offset+rotation(anchor:.bottom); case 1/2: scale+rotation(anchor:.center)) —
+        // структурно разные типы вьюх, между которыми SwiftUI не интерполирует geometry,
+        // а делает structural swap (снять старую ветку/вставить новую, аниморуется только
+        // сам transition). Поэтому повышение карты (index 1→0) не "доезжало" одним плавным
+        // движением, а перескакивало между двумя статичными позами. Единая цепочка даёт
+        // персистентные _ScaleEffect/_RotationEffect/_OffsetEffect узлы — SwiftUI реально
+        // едет пружиной от позы "карта позади" к позе "верхняя карта" как одно жёсткое тело.
+        //
+        // anchor тоже должен быть одним и тем же значением везде — сам anchor не анимируется
+        // (не часть animatableData), так что isTop ? .bottom : .center дал бы скачок пивота
+        // в первый же кадр перехода. .bottom — то, что уже было у верхней карты при драге.
+        let isTop = index == 0
+        let restScale: CGFloat = index == 1 ? 0.95 : 0.9
+        let restRotation: Double = index == 1 ? 9 : -9
+
+        let scale: CGFloat = isTop ? 1.0 : restScale
+        let rotation: Double = isTop ? Double(offset.x) / 20 : restRotation
+        let dx: CGFloat = isTop ? offset.x : 0
+        let dy: CGFloat = isTop ? offset.y : 0
+
+        content
+            .scaleEffect(scale)
+            .rotationEffect(.degrees(rotation), anchor: .bottom)
+            .offset(x: dx, y: dy)
+            .opacity(index >= 3 ? 0 : 1)
+            .zIndex(Double(3 - index))
     }
 }
