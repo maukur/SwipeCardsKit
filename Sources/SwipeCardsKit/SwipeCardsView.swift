@@ -216,17 +216,23 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
     // popTrigger-путь звал popItem(notifyCaller: false), и если isPoppingOut блокировал
     // повторный вызов (карта ещё летит), внешний код мог решить, что своп случился,
     // хотя колода не сдвинулась. Теперь onSwipeEnd зовётся всегда, когда поп реально прошёл.
-    // withAnimation вокруг сдвига массива больше не нужен — каждый слот стопки анимирует
-    // свой переход сам через .animation(value: index) на самой ForEach-строке (см. body).
     func popItem(triggeredByDrag: Bool) {
         guard !items.isEmpty, !isPoppingOut else { return }
         isPoppingOut = true
         poppedOffset = offset
         poppedDirection = lastDirection
         poppedViaDrag = triggeredByDrag
-        poppedItem = items.removeFirst()
-        selectedItem = items.first
-        offset = .zero
+        // Существующие слоты (лидер/второй) анимируются каждый своей кривой через
+        // .animation(value: index) на ForEach-строке — она перебивает любую ambient-анимацию
+        // для этих значений. А вот у карты, только что попавшей в видимое окно (третий слот),
+        // до этого момента не было ни строки, ни .animation(value:) — .transition(.opacity)
+        // сработает только если сама вставка идёт внутри анимированной транзакции. Этот
+        // withAnimation — как раз для неё; на уже существующие слоты он не влияет.
+        withAnimation(.easeOut(duration: 0.28)) {
+            poppedItem = items.removeFirst()
+            selectedItem = items.first
+            offset = .zero
+        }
         if let poppedItem {
             configuration.onSwipeEnd?(poppedItem, lastDirection)
         }
