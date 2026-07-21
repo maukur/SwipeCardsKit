@@ -34,10 +34,14 @@ struct CardSwipeEffect: ViewModifier {
         let dx: CGFloat = isTop ? offset.x : 0
         let dy: CGFloat = isTop ? offset.y : 0
 
+        // Порядок важен: offset должен идти до rotationEffect (как было у верхней карты
+        // изначально) — иначе поворот применяется к ещё не сдвинутой карте, а сдвиг едет
+        // поверх уже повёрнутой, и пивот перестаёт "путешествовать" вместе с пальцем.
+        // Для фоновых карт dx/dy == 0, так что порядок для них не важен.
         content
             .scaleEffect(scale)
-            .rotationEffect(.degrees(rotation), anchor: .bottom)
             .offset(x: dx, y: dy)
+            .rotationEffect(.degrees(rotation), anchor: .bottom)
             .opacity(index >= 3 ? 0 : 1)
             .zIndex(Double(3 - index))
     }
