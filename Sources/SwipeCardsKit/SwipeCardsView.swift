@@ -7,6 +7,19 @@
 
 import SwiftUI
 
+/// Что именно донесло карту до коммита — от этого зависит, какой физике должен
+/// соответствовать вылет (см. flightAnimation(for:) в animatePoppedItem()).
+private enum PoppedFlightKind {
+    /// Программный свайп (кнопка да/нет) — скорость жеста отсутствует по определению.
+    case button
+    /// Обычный медленный драг, дошедший до порога сам, без проекции — торможение уже погашено.
+    case distanceDrag
+    /// Короткий, но быстрый флик — до порога довела не дистанция, а predictedEndTranslation.
+    /// На iOS 17+ здесь есть реальная скорость жеста (pt/s) для полёта; на более старых —
+    /// её взять неоткуда (DragGesture.Value.velocity появился только в iOS 17).
+    case velocityDrag(CGFloat?)
+}
+
 public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View {
     // Deliberately NOT @State: this is mutated only by the configure()/onXxx() builder
     // chain below, right after each fresh init — never from within the view's own logic.
@@ -28,9 +41,10 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
     // clear the newer card mid-animation (and potentially double-fire onNoMoreCardsLeft).
     @State private var isPoppingOut = false
 
-    // Настоящий драг уже несёт скорость жеста — улёт мягче/резче, чем у кнопки,
-    // у которой скорость всегда нулевая. animatePoppedItem() выбирает кривую по этому флагу.
-    @State private var poppedViaDrag = true
+    // Три физически разных вылета: кнопка (нулевая скорость), драг, дошедший до порога
+    // своим ходом (скорость уже погашена торможением), и драг, которому порог "дало" только
+    // предсказанное конечное положение — в нём несём реальную скорость жеста дальше, в полёт.
+    @State private var poppedFlightKind: PoppedFlightKind = .button
 
     // pre-iOS17 фолбэк в animatePoppedItem() ждёт через Task.sleep вместо completion-колбэка
     // withAnimation. Храним хендл и отменяем предыдущий перед стартом нового — без этого,
@@ -70,14 +84,32 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
                 onDragChanged(value)
             }
             .onEnded { value in
-                if abs(value.translation.width) < configuration.triggerThreshold {
+                let distance = abs(value.translation.width)
+                // predictedEndTranslation — куда донесёт карту по инерции с текущей скоростью
+                // (iOS 13+, платформенная модель проекции из WWDC18 "Designing Fluid
+                // Interfaces"). Короткий быстрый флик долетает до порога через неё, даже не
+                // покрыв 150pt дистанции сам — как и должно ощущаться "как в Тиндере".
+                // distance >= 40 — защита от случайного дребезга: слишком короткое движение
+                // не должно коммититься каким бы резким оно ни было спроецировано.
+                let projected = abs(value.predictedEndTranslation.width)
+                let committed = distance >= 40 && projected >= configuration.triggerThreshold
+
+                guard committed, !items.isEmpty else {
                     // Небольшой перелёт мимо центра и обратно — карта отвечает как отпущенный
                     // физический объект, а не как сброс к дефолту.
                     withAnimation(.spring(response: 0.30, dampingFraction: 0.82)) {
                         offset = .zero
                     }
-                } else if !items.isEmpty {
-                    popItem(triggeredByDrag: true)
+                    return
+                }
+
+                if distance >= configuration.triggerThreshold {
+                    // Дошла своим ходом — скорость к этому моменту уже погашена торможением.
+                    popItem(flightKind: .distanceDrag)
+                } else if #available(iOS 17.0, *) {
+                    popItem(flightKind: .velocityDrag(value.velocity.width))
+                } else {
+                    popItem(flightKind: .velocityDrag(nil))
                 }
             }
     }
@@ -118,7 +150,7 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
         .onChange(of: popTrigger ?? .idle) { newValue in
             guard newValue != .idle else { return }
             lastDirection = newValue
-            popItem(triggeredByDrag: false)
+            popItem(flightKind: .button)
             popTrigger = nil
         }
         .onChange(of: items) { _ in
@@ -203,14 +235,30 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
         }
     }
 
+    // Кнопка стартует с нулевой скорости — чуть более длинная кривая с едва заметным bounce
+    // компенсирует отсутствие исходного импульса без отдельной фазы разгона. Обычный драг,
+    // дошедший своим ходом, тормозил уже во время самого драга — резче и без bounce. А флик,
+    // которому порог дала только проекция (predictedEndTranslation), несёт свою реальную
+    // скорость дальше, в вылет — на iOS 17+ по-настоящему (interpolatingSpring initialVelocity),
+    // на более старых — коротким response без данных о скорости.
+    private func flightAnimation(for kind: PoppedFlightKind) -> Animation {
+        switch kind {
+        case .button:
+            return .spring(response: 0.38, dampingFraction: 0.95)
+        case .distanceDrag:
+            return .spring(response: 0.32, dampingFraction: 1.0)
+        case let .velocityDrag(velocityX):
+            if let velocityX, #available(iOS 17.0, *) {
+                let normalized = min(max(abs(velocityX) / screenWidth, 0), 30)
+                return .interpolatingSpring(duration: 0.28, bounce: 0, initialVelocity: normalized)
+            }
+            return .spring(response: 0.26, dampingFraction: 1.0)
+        }
+    }
+
     func animatePoppedItem() {
         let multiplier: CGFloat = poppedDirection == .left ? -1 : 1
-        // Драг уже несёт скорость жеста — чуть более резкий, некружащий вылет. Кнопка
-        // стартует с нулевой скорости, поэтому даём кривой чуть больше времени и лёгкий
-        // bounce — это компенсирует отсутствие исходного импульса без отдельной фазы разгона.
-        let flightAnimation: Animation = poppedViaDrag
-            ? .spring(response: 0.32, dampingFraction: 1.0)
-            : .spring(response: 0.38, dampingFraction: 0.95)
+        let flightAnimation = flightAnimation(for: poppedFlightKind)
 
         if #available(iOS 17.0, *) {
             withAnimation(flightAnimation) {
@@ -252,12 +300,12 @@ public struct CardSwipeView<Item: Identifiable & Hashable, Content: View>: View 
     // popTrigger-путь звал popItem(notifyCaller: false), и если isPoppingOut блокировал
     // повторный вызов (карта ещё летит), внешний код мог решить, что своп случился,
     // хотя колода не сдвинулась. Теперь onSwipeEnd зовётся всегда, когда поп реально прошёл.
-    func popItem(triggeredByDrag: Bool) {
+    private func popItem(flightKind: PoppedFlightKind) {
         guard !items.isEmpty, !isPoppingOut else { return }
         isPoppingOut = true
         poppedOffset = offset
         poppedDirection = lastDirection
-        poppedViaDrag = triggeredByDrag
+        poppedFlightKind = flightKind
         isInternalItemsMutation = true
         // Существующие слоты (лидер/второй) анимируются каждый своей кривой через
         // .animation(value: index) на ForEach-строке — она перебивает любую ambient-анимацию
